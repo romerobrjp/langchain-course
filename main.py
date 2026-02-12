@@ -1,5 +1,5 @@
 from langchain.tools import tool
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, BaseMessage
 from dotenv import load_dotenv
 from langchain_ollama import ChatOllama
 
@@ -20,7 +20,7 @@ if __name__ == "__main__":
     llm = ChatOllama(model="qwen2.5", temperature=0)
     llm_with_tools = llm.bind_tools(tools)
 
-    messages = [HumanMessage(content="What is the length of the word 'lion'?")]
+    messages: list[BaseMessage] = [HumanMessage(content="What is the length of the word 'lion'?")]
     
     # Agent loop
     while True:
