@@ -1,49 +1,98 @@
 import os
+
 from dotenv import load_dotenv
-from langchain_community.document_loaders import TextLoader
-from langchain_text_splitters import CharacterTextSplitter
-from langchain_ollama import OllamaEmbeddings
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import HumanMessage
+from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_pinecone import PineconeVectorStore
-from pinecone import Pinecone, ServerlessSpec
 
 load_dotenv()
 
-EMBEDDING_DIMENSION = 768  # nomic-embed-text output dimension
+print("Initializing components...")
 
-def recreate_pinecone_index(pc: Pinecone, index_name: str, dimension: int) -> None:
-    existing = [idx.name for idx in pc.list_indexes()]
-    if index_name in existing:
-        print(f">> Deleting existing index '{index_name}'...")
-        pc.delete_index(index_name)
+llm = ChatOllama(
+    model=os.environ.get("OLLAMA_MODEL", "llama3"),
+    temperature=0,
+)
 
-    print(f">> Creating index '{index_name}' with dimension {dimension}...")
-    pc.create_index(
-        name=index_name,
-        dimension=dimension,
-        metric="cosine",
-        spec=ServerlessSpec(cloud="aws", region="us-east-1"),
-    )
-    print(">> Index created.")
+embeddings = OllamaEmbeddings(
+    model=os.environ.get("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text"),
+)
+
+print("Loading and splitting text...")
+
+vectorstore = PineconeVectorStore(
+    index_name=os.environ["PINECONE_INDEX_NAME"], embedding=embeddings
+)
+
+retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+
+prompt_template = ChatPromptTemplate.from_template(
+    """Answer the question based only on the following context:
+
+{context}
+
+Question: {question}
+
+Provide a detailed answer:"""
+)
 
 
-if __name__ == '__main__':
-    print("Loading text...")
-    loader = TextLoader(
-        "C:\\Users\\romer\\repos\\langchain-course\\mediumblog1.txt",
-        encoding="utf-8",
-    )
-    document = loader.load()
+def format_docs(docs):
+    """Format retrieved documents into a single string."""
+    return "\n\n".join(doc.page_content for doc in docs)
 
-    print(">> Splitting...")
-    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
-    texts = text_splitter.split_documents(document)
-    print(f">>> Number of chunks: {len(texts)}")
 
-    index_name = os.environ.get("PINECONE_INDEX_NAME")
-    pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
-    recreate_pinecone_index(pc, index_name, EMBEDDING_DIMENSION)
+def retrieval_chain_without_lcel(query: str):
+    """
+    Simple retrieval chain without LCEL.
+    Manually retrieves documents, formats them, and generates a response.
 
-    embeddings = OllamaEmbeddings(model=os.environ.get("OLLAMA_MODEL", "nomic-embed-text"))
-    print(">> Ingesting into Pinecone...")
-    PineconeVectorStore.from_documents(texts, embeddings, index_name=index_name)
-    print(">> Done!")
+    Limitations:
+    - Manual step-by-step execution
+    - No built-in streaming support
+    - No async support without additional code
+    - Harder to compose with other chains
+    - More verbose and error-prone
+    """
+    # Step 1: Retrieve relevant documents
+    docs = retriever.invoke(query)
+
+    # Step 2: Format documents into context string
+    context = format_docs(docs)
+
+    # Step 3: Format the prompt with context and question
+    messages = prompt_template.format_messages(context=context, question=query)
+
+    # Step 4: Invoke LLM with the formatted messages
+    response = llm.invoke(messages)
+
+    # Step 5: Return the content
+    return response.content
+
+
+if __name__ == "__main__":
+    print("Retrieving...")
+
+    # Query
+    query = "what is Pinecone in machine learning?"
+
+    # ========================================================================
+    # Option 0: Raw invocation without RAG
+    # ========================================================================
+    print("\n" + "=" * 70)
+    print("IMPLEMENTATION 0: Raw LLM Invocation (No RAG)")
+    print("=" * 70)
+    result_raw = llm.invoke([HumanMessage(content=query)])
+    print("\nAnswer:")
+    print(result_raw.content)
+
+    # ========================================================================
+    # Option 1: Use implementation WITHOUT LCEL
+    # ========================================================================
+    print("\n" + "=" * 70)
+    print("IMPLEMENTATION 1: Without LCEL")
+    print("=" * 70)
+    result_without_lcel = retrieval_chain_without_lcel(query)
+    print("\nAnswer:")
+    print(result_without_lcel)
